@@ -1,0 +1,90 @@
+{
+  "name": "replta-workflow-viewer",
+  "displayName": "REPLTA Workflow Viewer",
+  "description": "View .agent-workflow documents and archives through VSCode's built-in Markdown preview.",
+  "version": "0.1.0",
+  "publisher": "replta",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:repltaWorkflow.active",
+    "onView:repltaWorkflow.archives",
+    "onCommand:repltaWorkflow.refresh",
+    "onCommand:repltaWorkflow.openOverview",
+    "onCommand:repltaWorkflow.openMarkdownPreview"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "repltaWorkflow.refresh",
+        "title": "Refresh Workflow Views",
+        "category": "REPLTA Workflow",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "repltaWorkflow.openMarkdownPreview",
+        "title": "Open Markdown Preview",
+        "category": "REPLTA Workflow",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "repltaWorkflow.openOverview",
+        "title": "Open Workflow Overview",
+        "category": "REPLTA Workflow",
+        "icon": "$(preview)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "repltaWorkflow",
+          "title": "Workflow",
+          "icon": "resources/workflow.svg"
+        }
+      ]
+    },
+    "views": {
+      "repltaWorkflow": [
+        {
+          "id": "repltaWorkflow.active",
+          "name": "Active Workflow"
+        },
+        {
+          "id": "repltaWorkflow.archives",
+          "name": "Archives"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "repltaWorkflow.refresh",
+          "when": "view == repltaWorkflow.active || view == repltaWorkflow.archives",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "repltaWorkflow.openOverview",
+          "when": "viewItem == workflowOverview",
+          "group": "inline"
+        },
+        {
+          "command": "repltaWorkflow.openMarkdownPreview",
+          "when": "viewItem == workflowFile",
+          "group": "inline"
+        }
+      ]
+    }
+  }
+}

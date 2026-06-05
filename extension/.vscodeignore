@@ -1,0 +1,10 @@
+.agent-workflow/**
+.git/**
+.codex/**
+out/**/*.map
+src/**
+tsconfig.json
+*.vsix
+node_modules/**
+README.ko.md
+AGENTS.md
