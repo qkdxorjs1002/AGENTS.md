@@ -86,6 +86,7 @@ declare module 'vscode' {
   export interface Webview {
     html: string;
     cspSource: string;
+    onDidReceiveMessage(listener: (message: unknown) => unknown): Disposable;
   }
 
   export interface WebviewOptions {

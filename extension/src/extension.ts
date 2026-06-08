@@ -22,6 +22,11 @@ interface TabDocument {
   missingText: string;
 }
 
+interface ArchiveListItem {
+  folderName: string;
+  summary: string;
+}
+
 interface WorkflowItemBlock {
   id: string;
   kind: string;
@@ -345,10 +350,13 @@ class WorkflowWebviewManager {
       title,
       vscode.ViewColumn.One,
       {
-        enableScripts: false,
+        enableScripts: true,
         retainContextWhenHidden: false
       }
     );
+    this.panel.webview.onDidReceiveMessage((message: unknown) => {
+      void this.handleMessage(message);
+    });
     this.panel.onDidDispose(() => {
       this.panel = undefined;
     });
@@ -359,13 +367,44 @@ class WorkflowWebviewManager {
   private async renderCurrentView(webview: vscode.Webview): Promise<string> {
     switch (this.currentView.type) {
       case 'document':
-        return renderPage(webview, await renderDocumentView(this.currentView.uri, this.currentView.title));
+        return renderPage(
+          webview,
+          await renderDocumentView(this.currentView.uri, this.currentView.title),
+          `document:${relativePath(this.currentView.uri)}`
+        );
       case 'archive':
-        return renderPage(webview, await renderArchiveView(this.currentView.uri, this.currentView.title));
+        return renderPage(
+          webview,
+          await renderArchiveView(this.currentView.uri, this.currentView.title),
+          `archive:${relativePath(this.currentView.uri)}`
+        );
       case 'overview':
       default:
-        return renderPage(webview, await renderOverviewView());
+        return renderPage(webview, await renderOverviewView(), 'overview');
     }
+  }
+
+  private async handleMessage(message: unknown): Promise<void> {
+    if (!isRecord(message) || message.command !== 'openArchive' || typeof message.archiveFolder !== 'string') {
+      return;
+    }
+
+    await this.openArchiveFromDashboard(message.archiveFolder);
+  }
+
+  private async openArchiveFromDashboard(folderName: string): Promise<void> {
+    const root = getWorkspaceRoot();
+    if (!root) {
+      return;
+    }
+
+    const archiveRootUri = vscode.Uri.joinPath(root.uri, WORKFLOW_DIR, ARCHIVE_DIR);
+    const archiveFolders = await listArchiveFolders(archiveRootUri);
+    if (!archiveFolders.includes(folderName)) {
+      return;
+    }
+
+    await this.openArchive(vscode.Uri.joinPath(archiveRootUri, folderName), folderName);
   }
 }
 
@@ -384,7 +423,9 @@ async function renderOverviewView(): Promise<string> {
   const presentDocuments = documents.filter(({ content }) => content !== undefined);
   const taskDocument = documents.find(({ document }) => document.filename === 'task.md');
   const taskSummary = summarizeTasks(taskDocument?.content);
-  const archiveFolders = await listArchiveFolders(vscode.Uri.joinPath(workflowUri, ARCHIVE_DIR));
+  const archiveRootUri = vscode.Uri.joinPath(workflowUri, ARCHIVE_DIR);
+  const archiveFolders = await listArchiveFolders(archiveRootUri);
+  const visibleArchiveItems = await loadArchiveListItems(archiveRootUri, archiveFolders.slice(0, 8));
 
   const sections = documents.map(({ document, uri, content }) => ({
     title: document.label,
@@ -394,7 +435,7 @@ async function renderOverviewView(): Promise<string> {
   }));
 
   const archiveItems = archiveFolders.length > 0
-    ? `<ul class="archive-list">${archiveFolders.slice(0, 8).map((folder) => `<li><span>${escapeHtml(folder)}</span><code>${escapeHtml(`${WORKFLOW_DIR}/${ARCHIVE_DIR}/${folder}`)}</code></li>`).join('')}</ul>`
+    ? `<ul class="archive-list">${visibleArchiveItems.map(renderArchiveListItem).join('')}</ul>`
     : '<p class="muted">No workflow archives found.</p>';
 
   return `
@@ -500,6 +541,90 @@ async function listArchiveFolders(archiveRootUri: vscode.Uri): Promise<string[]>
     .sort((left, right) => right.localeCompare(left));
 }
 
+async function loadArchiveListItems(archiveRootUri: vscode.Uri, folderNames: string[]): Promise<ArchiveListItem[]> {
+  return Promise.all(folderNames.map(async (folderName) => {
+    const summaryUri = vscode.Uri.joinPath(archiveRootUri, folderName, 'summary.md');
+    const summaryContent = await readMarkdownFile(summaryUri);
+    return {
+      folderName,
+      summary: extractArchiveSummary(summaryContent, folderName)
+    };
+  }));
+}
+
+function renderArchiveListItem(item: ArchiveListItem): string {
+  return `
+    <li>
+      <button class="archive-open-button" type="button" data-archive-folder="${escapeHtml(item.folderName)}">
+        <span class="archive-summary">${escapeHtml(item.summary)}</span>
+        <small class="archive-folder">${escapeHtml(item.folderName)}</small>
+      </button>
+    </li>
+  `;
+}
+
+function extractArchiveSummary(markdown: string | undefined, folderName: string): string {
+  if (!markdown) {
+    return folderName;
+  }
+
+  return firstUsefulSummaryLine(extractMarkdownSection(markdown, 'Original Request'))
+    ?? firstUsefulSummaryLine(extractMarkdownSection(markdown, 'Final Requirements'))
+    ?? firstUsefulSummaryLine(markdown)
+    ?? folderName;
+}
+
+function extractMarkdownSection(markdown: string, heading: string): string | undefined {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const sectionLines: string[] = [];
+  let collecting = false;
+
+  for (const line of lines) {
+    const sectionHeading = /^##\s+(.+?)\s*$/.exec(line);
+    if (sectionHeading) {
+      if (collecting) {
+        break;
+      }
+
+      collecting = sectionHeading[1].trim().toLowerCase() === heading.toLowerCase();
+      continue;
+    }
+
+    if (collecting) {
+      sectionLines.push(line);
+    }
+  }
+
+  return sectionLines.length > 0 ? sectionLines.join('\n') : undefined;
+}
+
+function firstUsefulSummaryLine(markdown: string | undefined): string | undefined {
+  if (!markdown) {
+    return undefined;
+  }
+
+  for (const line of markdown.replace(/\r\n/g, '\n').split('\n')) {
+    const summary = line
+      .trim()
+      .replace(/^[-*]\s+/, '')
+      .replace(/^(?:REQ|SPEC|TASK|FINDING|ASSUMPTION|QUESTION)-\d{3}:\s*/, '')
+      .trim();
+
+    if (summary.length === 0 || summary.startsWith('#')) {
+      continue;
+    }
+
+    return truncateSummary(summary);
+  }
+
+  return undefined;
+}
+
+function truncateSummary(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+}
+
 function renderDocumentCard(options: {
   title: string;
   source: string;
@@ -578,7 +703,9 @@ function renderMetric(label: string, value: string, detail: string): string {
 }
 
 function renderStatusPill(label: string, count: number): string {
-  return `<span class="status-pill"><strong>${count}</strong>${escapeHtml(label)}</span>`;
+  const statusClass = label.toLowerCase().replace(/\s+/g, '-');
+  const activeClasses = count > 0 ? ` status-pill-active status-pill-${statusClass}` : '';
+  return `<span class="status-pill${activeClasses}"><strong>${count}</strong>${escapeHtml(label)}</span>`;
 }
 
 function taskStatusLabel(summary: TaskSummary): string {
@@ -811,13 +938,14 @@ function renderStatusBadge(status: string): string {
   return `<span class="task-status-badge task-status-${className}">${status}</span>`;
 }
 
-function renderPage(webview: vscode.Webview, body: string): string {
+function renderPage(webview: vscode.Webview, body: string, viewStateKey: string): string {
   const nonce = String(Date.now());
+  const encodedViewStateKey = JSON.stringify(viewStateKey).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>REPLTA Workflow</title>
   <style nonce="${nonce}">
@@ -947,6 +1075,34 @@ function renderPage(webview: vscode.Webview, body: string): string {
 
     .status-pill strong {
       color: var(--text);
+    }
+
+    .status-pill-active {
+      border-color: currentColor;
+    }
+
+    .status-pill-active strong {
+      color: inherit;
+    }
+
+    .status-pill-pending {
+      color: var(--vscode-charts-yellow, var(--muted));
+    }
+
+    .status-pill-in-progress {
+      color: var(--vscode-charts-blue, var(--link));
+    }
+
+    .status-pill-completed {
+      color: var(--vscode-charts-green, var(--text));
+    }
+
+    .status-pill-blocked {
+      color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground, var(--text)));
+    }
+
+    .status-pill-skipped {
+      color: var(--muted);
     }
 
     .layout {
@@ -1202,8 +1358,7 @@ function renderPage(webview: vscode.Webview, body: string): string {
       color: var(--muted);
     }
 
-    .markdown-body code,
-    .archive-list code {
+    .markdown-body code {
       padding: 1px 4px;
       border-radius: 4px;
       background: var(--code-bg);
@@ -1262,8 +1417,39 @@ function renderPage(webview: vscode.Webview, body: string): string {
       border-bottom: 0;
     }
 
-    .archive-list span,
-    .archive-list code {
+    .archive-open-button {
+      display: grid;
+      gap: 4px;
+      width: 100%;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+
+    .archive-open-button:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    .archive-open-button:hover .archive-summary {
+      color: var(--link);
+    }
+
+    .archive-summary {
+      font-weight: 600;
+    }
+
+    .archive-folder {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .archive-summary,
+    .archive-folder {
       overflow-wrap: anywhere;
     }
 
@@ -1309,12 +1495,110 @@ function renderPage(webview: vscode.Webview, body: string): string {
 </head>
 <body>
   ${body}
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const viewStateKey = ${encodedViewStateKey};
+    let webviewState = vscode.getState() || {};
+    const getStoredViews = () => {
+      return webviewState.views && typeof webviewState.views === 'object' ? webviewState.views : {};
+    };
+    let viewState = getStoredViews()[viewStateKey] || {};
+    let scrollSaveTimer;
+
+    const getSelectedTabs = () => {
+      const tabs = { ...(viewState.tabs || {}) };
+      document.querySelectorAll('.tab-radio:checked').forEach((radio) => {
+        if (!(radio instanceof HTMLInputElement) || !radio.name || !radio.id) {
+          return;
+        }
+
+        tabs[radio.name] = radio.id;
+      });
+      return tabs;
+    };
+
+    const saveViewState = () => {
+      viewState = {
+        ...viewState,
+        tabs: getSelectedTabs(),
+        scrollY: window.scrollY
+      };
+      webviewState = {
+        ...webviewState,
+        views: {
+          ...getStoredViews(),
+          [viewStateKey]: viewState
+        }
+      };
+      vscode.setState(webviewState);
+    };
+
+    const scheduleScrollSave = () => {
+      window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = window.setTimeout(saveViewState, 120);
+    };
+
+    const restoreViewState = () => {
+      const tabs = viewState.tabs || {};
+      Object.entries(tabs).forEach(([groupName, tabId]) => {
+        document.querySelectorAll('.tab-radio').forEach((radio) => {
+          if (radio instanceof HTMLInputElement && radio.name === groupName && radio.id === String(tabId)) {
+            radio.checked = true;
+          }
+        });
+      });
+
+      if (typeof viewState.scrollY === 'number') {
+        window.scrollTo(0, viewState.scrollY);
+      }
+    };
+
+    const restoreAfterLayout = () => {
+      window.requestAnimationFrame(restoreViewState);
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', restoreAfterLayout, { once: true });
+    } else {
+      restoreAfterLayout();
+    }
+
+    document.addEventListener('change', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.classList.contains('tab-radio')) {
+        saveViewState();
+      }
+    });
+
+    window.addEventListener('scroll', scheduleScrollSave, { passive: true });
+    window.addEventListener('beforeunload', saveViewState);
+
+    document.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const archiveButton = target?.closest('[data-archive-folder]');
+      if (!(archiveButton instanceof HTMLElement)) {
+        return;
+      }
+
+      const archiveFolder = archiveButton.dataset.archiveFolder;
+      if (!archiveFolder) {
+        return;
+      }
+
+      saveViewState();
+      vscode.postMessage({ command: 'openArchive', archiveFolder });
+    });
+  </script>
 </body>
 </html>`;
 }
 
 function getWorkspaceRoot(): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.workspaceFolders?.[0];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function emptyNode(label: string): WorkflowNode {
