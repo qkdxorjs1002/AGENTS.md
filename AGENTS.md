@@ -53,14 +53,13 @@ Before finalizing requirements:
 
 Planning must happen before implementation.
 
-First, draft the implementation plan without writing files.
+Do not modify source code, tests, configs, migrations, generated files, or other durable project artifacts during planning. Only workflow planning files may be created or updated.
 
-During planning, use `request_user_input` Tool whenever any ambiguity, trade-off, or implementation choice could affect scope, risk, compatibility, cost, or direction. Ask as many times as needed until all material ambiguities are resolved.
+During planning, create or update `.agent-workflow/plan.md` as a draft. Keep it current as decisions are made. Mark it finalized only after explicit user confirmation.
 
-Create or update `plan.md` as a draft during planning. Keep it updated as user decisions are made, and mark it finalized only after user confirmation.
+Before finalizing the plan, use `request_user_input` whenever an ambiguity, trade-off, or implementation choice could affect scope, risk, compatibility, cost, architecture, UX, data model, public interface, or implementation direction. Ask again as needed until all material ambiguities are resolved.
 
-The plan must include only what is needed:
-
+The plan must be concise but sufficiently detailed to guide implementation without guesswork. Include only what is needed:
 - objective,
 - per-item goals,
 - constraints and assumptions,
@@ -72,8 +71,12 @@ The plan must include only what is needed:
 - items requiring approval.
 
 Assign stable spec IDs: `SPEC-001`, `SPEC-002`, etc.
-Each `SPEC-*` must include a concise `Goal` that states the intended outcome for that plan item.
-Each `SPEC-*` must trace to one or more `REQ-*`.
+
+Each `SPEC-*` must include:
+- Goal: concise intended outcome,
+- Trace: one or more related REQ-*,
+- enough implementation detail to make the work executable,
+- relevant risks, validation, and approval needs when applicable.
 
 ## 5. Tasks
 
